@@ -102,6 +102,7 @@ corpora
 logdir
 preprocessed
 
+movielens
 movielens-dat/
 yoochoose-dat/
 log/
