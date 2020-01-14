@@ -14,6 +14,7 @@ import tensorflow as tf
 import json
 import os, re
 import logging
+import numpy as np
 
 logging.basicConfig(level=logging.INFO)
 
@@ -67,7 +68,7 @@ def postprocess(hypotheses, idx2token):
     '''
     _hypotheses = []
     for h in hypotheses:
-        sent = "".join(idx2token[idx] for idx in h)
+        sent = " ".join(idx2token[idx] for idx in h)
         sent = sent.split("</s>")[0].strip()
         sent = sent.replace("▁", " ") # remove bpe symbols
         _hypotheses.append(sent.strip())
@@ -176,5 +177,12 @@ def calc_bleu(ref, translation):
 #     return vars
 
 
-
-
+def acc(y_hat, y):
+    acc = []
+    for seq_, seq in zip(y_hat, y):
+        cnt = 0
+        for item in seq_:
+            if item in seq:
+                cnt += 1
+        acc.append(float(cnt) / len(seq_))
+    print(np.mean(acc))

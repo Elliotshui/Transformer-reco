@@ -8,6 +8,7 @@ https://www.github.com/kyubyong/transformer
 Transformer network
 '''
 import tensorflow as tf
+import numpy as np
 
 from data_load import load_vocab
 from modules import get_token_embeddings, ff, positional_encoding, multihead_attention, label_smoothing, noam_scheme
@@ -70,7 +71,7 @@ class Transformer:
         memory = enc
         return memory, sents1, src_masks
 
-    def decode(self, ys, memory, src_masks, training=True):
+    def decode(self, ys, memory, src_masks, output_masks, training=True):
         '''
         memory: encoder outputs. (N, T1, d_model)
         src_masks: (N, T1)
@@ -124,6 +125,7 @@ class Transformer:
         # Final linear projection (embedding weights are shared)
         weights = tf.transpose(self.embeddings) # (d_model, vocab_size)
         logits = tf.einsum('ntd,dk->ntk', dec, weights) # (N, T2, vocab_size)
+        logits = logits * output_masks # (N, T2, vocab_size)
         y_hat = tf.to_int32(tf.argmax(logits, axis=-1))
 
         return logits, y_hat, y, sents2
@@ -159,25 +161,26 @@ class Transformer:
 
         return loss, train_op, global_step, summaries
 
-    def eval(self, xs, ys):
+    def eval(self, xs, ys, y_mask):
         '''Predicts autoregressively
         At inference, input ys is ignored.
         Returns
         y_hat: (N, T2)
         '''
         decoder_inputs, y, y_seqlen, sents2 = ys
-
         decoder_inputs = tf.ones((tf.shape(xs[0])[0], 1), tf.int32) * self.token2idx["<s>"]
         ys = (decoder_inputs, y, y_seqlen, sents2)
 
         memory, sents1, src_masks = self.encode(xs, False)
 
         logging.info("Inference graph is being built. Please be patient.")
+        output_mask = self.output_masks(decoder_inputs, y_mask, None)
         for _ in tqdm(range(self.hp.maxlen2)):
-            logits, y_hat, y, sents2 = self.decode(ys, memory, src_masks, False)
+            logits, y_hat, y, sents2 = self.decode(ys, memory, src_masks, output_mask, False)
             if tf.reduce_sum(y_hat, 1) == self.token2idx["<pad>"]: break
 
             _decoder_inputs = tf.concat((decoder_inputs, y_hat), 1)
+            output_mask = self.output_masks(_decoder_inputs, y_mask, output_mask)
             ys = (_decoder_inputs, y, y_seqlen, sents2)
 
         # monitor a random sample
@@ -193,3 +196,30 @@ class Transformer:
 
         return y_hat, summaries
 
+
+    def output_masks(self, decoder_inputs, prob_y, last_output_mask):
+
+        prob_inputs = tf.one_hot(decoder_inputs, self.hp.vocab_size, on_value = 0.0, off_value = 1.0, axis = -1)
+        prob_inputs = tf.reduce_min(prob_inputs, axis = -2)
+        prob_inputs = prob_inputs * prob_y  # (N * vocab_size)
+        prob_inputs = tf.expand_dims(prob_inputs, 1)
+        if last_output_mask is None:
+            return prob_inputs
+        output_mask = tf.concat((last_output_mask, prob_inputs), 1)
+        return output_mask
+
+    def y_masks(self, y, num_neg = 1000):
+        prob_y = tf.one_hot(y, self.hp.vocab_size, on_value = 0.0, off_value = 1.0, axis = -1)
+        prob_y = tf.reduce_min(prob_y, axis = -2)
+
+        neg_prob = []
+        neg = np.random.choice(self.hp.vocab_size, size = (num_neg), replace = False)
+        neg = tf.one_hot(neg, self.hp.vocab_size, on_value = 1.0, off_value = 0.0, axis = -1)
+        neg = tf.reduce_sum(neg, axis = 0)
+        neg = 1 - neg
+        for i in range(self.hp.batch_size):
+            neg_prob.append(neg)
+        prob_y = prob_y * neg_prob
+
+        prob_y = 1 - prob_y
+        return prob_y

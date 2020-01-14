@@ -101,3 +101,9 @@ ENV/
 corpora
 logdir
 preprocessed
+
+movielens-dat/
+yoochoose-dat/
+log/
+eval/
+test/
